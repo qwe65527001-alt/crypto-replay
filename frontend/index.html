@@ -1,0 +1,966 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>加密貨幣合約復盤交易</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <!-- 終極防呆防崩潰補丁：攔截 getElementById，若 app.js 抓不到元素自動產生隱藏替身，徹底消滅 null 報錯 -->
+  <script>
+    (function() {
+      const orig = document.getElementById;
+      document.getElementById = function(id) {
+        let el = orig.call(document, id);
+        if (!el) {
+          el = document.createElement('button');
+          el.id = id;
+          el.style.display = 'none';
+          document.body.appendChild(el);
+        }
+        return el;
+      };
+    })();
+  </script>
+
+  <header class="topbar">
+    <div class="brand">復盤<span>合約交易</span></div>
+
+    <div class="group" id="session-group">
+      <select id="session-select" title="交易工作階段" aria-label="交易工作階段"></select>
+      <button id="btn-new-session" class="btn primary">新工作階段</button>
+      <button id="btn-delete-session" class="btn icon" title="刪除此工作階段" aria-label="刪除此工作階段">&#x1F5D1;</button>
+    </div>
+
+    <div class="group tf-group" id="tf-group" role="radiogroup" aria-label="時間週期"></div>
+
+    <div class="group">
+      <button id="btn-indicators" class="btn" aria-haspopup="dialog">技術指標 <span id="indicator-count" class="pill">0</span></button>
+      <button id="btn-fib" class="btn" aria-haspopup="dialog" aria-expanded="false" title="斐波那契回撤 (F 鍵繪製新圖)">斐波那契 <span id="fib-count" class="pill">0</span></button>
+      <button id="btn-fvg" class="btn" aria-haspopup="dialog" aria-expanded="false" aria-pressed="false" title="公允價值缺口 (G 鍵切換)">FVG <span id="fvg-count" class="pill">0</span></button>
+      <button id="btn-peek" class="btn" aria-pressed="false" title="快速比對1年內價格走勢(天圖) (按住 D 鍵)">快速比對1年內價格走勢(天圖)</button>
+      <button id="btn-peek-btc" class="btn" aria-pressed="false" title="快速比對BTC2年內價格走勢(天圖) (按住 Y 鍵)">快速比對BTC2年內價格走勢(天圖)</button>
+      <button id="btn-help" class="btn icon" aria-haspopup="dialog" aria-expanded="false" title="說明 (H)" aria-label="說明">說明</button>
+      <button id="btn-beginner" class="btn primary" aria-haspopup="dialog" aria-expanded="false" title="新手完整操作教學">新手說明</button>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="readout">
+      <div id="day-progress" class="day-progress day-only" title="交易日 00:00–24:00 UTC：已過時間與剩餘時數" aria-label="交易日剩餘時數">
+        <div id="day-progress-fill" class="fill"></div>
+        <span id="day-progress-text" class="mono">&ndash;</span>
+      </div>
+      <span id="cursor-time" class="mono">&ndash;</span>
+      <span id="cursor-price" class="mono price">&ndash;</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="center">
+      <div id="session-note" class="notice hidden" role="status"></div>
+      <section class="chart-area">
+        <div id="chart" aria-label="價格圖表"></div>
+        <div id="legend" class="legend" aria-live="off"></div>
+        <div id="chart-overlay" class="chart-overlay hidden"><div class="overlay-card" id="overlay-card"></div></div>
+        <div id="draw-hint" class="draw-hint hidden" role="status"></div>
+      <div id="nt-panel" class="nt-panel day-only hidden" tabindex="-1" role="dialog" aria-labelledby="nt-title">
+        <div class="popover-head">
+          <h2 id="nt-title">新合約交易</h2>
+          <button type="button" id="btn-nt-cancel" class="btn icon" aria-label="關閉 (Esc)">&times;</button>
+        </div>
+        <label class="nt-row"><span class="lbl">區間</span> <select id="nt-zone" aria-label="支撐區間"></select></label>
+        <div class="nt-row nt-ratio" role="group" aria-label="風險報酬比">
+          <span class="lbl">報酬比 1 :</span>
+          <button type="button" class="btn chip nt-ratio-chip" data-ratio="1.5">1.5</button>
+          <button type="button" class="btn chip nt-ratio-chip" data-ratio="2">2</button>
+          <button type="button" class="btn chip nt-ratio-chip" data-ratio="3">3</button>
+          <input id="nt-ratio" type="number" step="0.1" min="0.1" max="100" value="2" aria-label="風險報酬比（任意數值）">
+        </div>
+        <div class="nt-row nt-stop">
+          <span class="lbl">停損</span>
+          <button type="button" id="btn-stop-down" class="btn small" title="將停損降低 0.05%（向下鍵；Shift = 0.25%）">&minus;</button>
+          <input id="nt-stop" type="number" step="any" min="0" placeholder="區間中點" aria-label="停損價格">
+          <button type="button" id="btn-stop-up" class="btn small" title="將停損提高 0.05%（向上鍵；Shift = 0.25%）">+</button>
+        </div>
+        <div class="small muted nt-hints">
+          <div>區間中點（預設） <span id="np-mid" class="mono">&ndash;</span> <button type="button" id="btn-stop-mid" class="btn small" title="恢復預設停損">使用</button></div>
+          <div>ATR 停損（區間下緣 &minus; 0.5 &times; ATR） <span id="np-atrstop" class="mono">&ndash;</span> <button type="button" id="btn-stop-atr" class="btn small" title="區間下緣減去 0.5 x ATR 14">使用</button></div>
+        </div>
+        <dl class="kv">
+          <dt>進場（K 線收盤）</dt><dd id="np-entry" class="mono">&ndash;</dd>
+          <dt>停損</dt><dd id="np-stop" class="mono">&ndash;</dd>
+          <dt>目標</dt><dd id="np-tp" class="mono">&ndash;</dd>
+          <dt>風險報酬比</dt><dd id="np-rr" class="mono">&ndash;</dd>
+          <dt>數量</dt><dd id="np-coins" class="mono">&ndash;</dd>
+          <dt>倉位價值</dt><dd id="np-value" class="mono">&ndash;</dd>
+          <dt>開倉手續費 (0.1 %)</dt><dd id="np-fee" class="mono">&ndash;</dd>
+          <dt>風險</dt><dd id="np-risk" class="mono">&ndash;</dd>
+          <dt>ATR 14 (15m)</dt><dd id="np-atr" class="mono">&ndash;</dd>
+        </dl>
+        <ul id="nt-rules" class="rules small" aria-label="進場規則（自行勾選核對）"></ul>
+        <p id="nt-warn" class="small warn" role="status"></p>
+        <p id="nt-error" class="error small" role="alert"></p>
+        <div class="nt-row nt-conf" role="group" aria-label="信心程度 0 到 10" title="您對這筆交易有多大信心？0 = 完全沒有，10 = 確定。隨交易儲存，之後無法更改。">
+          <span class="lbl">信心度</span>
+          <div class="nt-conf-chips" id="nt-conf"></div>
+        </div>
+        <label class="nt-row"><span class="lbl">備註</span> <input id="nt-notes" type="text" maxlength="500" autocomplete="off" placeholder="選填"></label>
+        <div class="dialog-actions">
+          <span class="spacer"></span>
+          <button type="button" class="btn buy" id="btn-nt-buy" title="在此 15 分鐘 K 線收盤時成交。上下鍵可移動停損。" disabled>開倉下單</button>
+        </div>
+      </div>
+
+        <div id="fib-popover" class="popover hidden" role="dialog" aria-label="斐波那契回撤">
+          <div class="popover-head">
+            <strong>斐波那契回撤</strong>
+            <button id="btn-close-fib" class="btn icon" aria-label="關閉">&times;</button>
+          </div>
+          <div class="popover-add">
+            <button id="btn-fib-draw" class="btn primary">繪製回撤 (F)</button>
+            <p class="muted small">點擊波段起點，再點擊波段終點。點擊會自動對齊 K 線高低點。Esc 鍵取消，Delete 鍵刪除選取的項目。</p>
+            <label class="row-flex small"><input type="checkbox" id="fib-auto"> 自動計算最近
+              <input type="number" id="fib-lookback" class="short" min="2" max="2000" value="100" aria-label="回看 K 線數"> 根 K 線的斐波那契</label>
+          </div>
+          <ul id="fib-list" class="indicator-list" aria-label="已繪製的回撤"></ul>
+          <p id="fib-empty" class="muted small">尚未繪製回撤。</p>
+        </div>
+
+        <div id="help-popover" class="popover hidden" role="dialog" aria-label="說明與快捷鍵">
+          <div class="popover-head">
+            <strong>鍵盤快捷鍵</strong>
+            <button id="btn-close-help" class="btn icon" aria-label="關閉">&times;</button>
+          </div>
+         <dl class="keys compact">
+            <dt><kbd>P</kbd></dt><dd>播放 / 暫停</dd>
+            <dt><kbd>&rarr;</kbd></dt><dd>單步前進</dd>
+            <dt><kbd>R</kbd></dt><dd>回到起點</dd>
+            <dt><kbd>&uarr;</kbd> <kbd>&darr;</kbd></dt><dd>縮放圖表</dd>
+            <dt><kbd>Space</kbd></dt><dd>預設縮放</dd>
+            <dt><kbd>Alt</kbd> + <kbd>H</kbd></dt><dd>劃設水平線</dd>
+            <dt><kbd>Alt</kbd> + <kbd>T</kbd></dt><dd>劃設趨勢線</dd>
+            <dt><kbd>F</kbd></dt><dd>斐波那契</dd>
+            <dt><kbd>Delete</kbd></dt><dd>移除選取線條 / 回撤</dd>
+            <dt><kbd>G</kbd></dt><dd>公允價值缺口</dd>
+            <dt><kbd>O</kbd></dt><dd>布林通道</dd>
+            <dt><kbd>S</kbd></dt><dd>每日 EMA 200 線</dd>
+            <dt><kbd>L</kbd></dt><dd>支撐/阻力帶、6個月高低點</dd>
+            <dt><kbd>D</kbd></dt><dd>按住：快速比對1年內價格走勢(天圖)</dd>
+            <dt><kbd>Y</kbd></dt><dd>按住：快速比對BTC2年內價格走勢(天圖)</dd>
+            <dt><kbd>H</kbd></dt><dd>本說明清單</dd>
+            <dt><kbd>Esc</kbd></dt><dd>取消 / 關閉</dd>
+          </dl>
+          <dl class="keys compact swing-only">
+            <dt><kbd>B</kbd></dt><dd>開倉保證金</dd>
+          </dl>
+          <p class="muted small day-only" style="margin:6px 0 2px">日內交易</p>
+          <dl class="keys compact day-only">
+            <dt><kbd>N</kbd> <kbd>B</kbd></dt><dd>新交易</dd>
+            <dt><kbd>X</kbd></dt><dd>平倉</dd>
+            <dt><kbd>&uarr;</kbd> <kbd>&darr;</kbd></dt><dd>移動停損（面板開啟時）</dd>
+            <dt><kbd>Z</kbd></dt><dd>繪製區間</dd>
+            <dt><kbd>K</kbd></dt><dd>跳過這天</dd>
+            <dt><kbd>J</kbd></dt><dd>下一日 &gt; EMA</dd>
+            <dt><kbd>E</kbd></dt><dd>下一個策略訊號</dd>
+            <dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>Enter</kbd></dt><dd>複查標記、儲存</dd>
+          </dl>
+        </div>
+
+        <!-- 全新超詳細手把手「新手說明」彈出視窗 -->
+        <div id="beginner-popover" class="popover hidden" role="dialog" aria-label="新手完整操作教學">
+          <div class="popover-head">
+            <strong>新手完整操作手冊 🚀</strong>
+            <button id="btn-close-beginner" class="btn icon" aria-label="關閉">&times;</button>
+          </div>
+          <div class="popover-add" style="max-height: 400px; overflow-y: auto; font-size: 0.95rem; line-height: 1.6; padding-right: 8px;">
+            <p><b>1. 如何開新盤面與選擇日期？</b><br>
+            點擊頂部的 <b>「新工作階段」</b> 按鈕。在跳出的視窗中：<br>
+            • 選擇你要練習的<b>幣種</b>與時間週期。<br>
+            • 點擊 <b>🎲 隨機日期</b> 按鈕可以自動幫你抽選一個歷史上的隨機起點，防止劇透！<br>
+            • 設定好初始資金（例如 10,000 USDT）後按下建立。</p>
+
+            <p><b>2. 進到盤面後要做什麼？</b><br>
+            • 畫面中央是 K 線圖。你可以透過下方的播放鍵 <kbd>▶</kbd> 或單步前進按鈕（或鍵盤右方向鍵 <kbd>→</kbd>）讓 K 線一根一根往右跑，模擬真實行情的推進。<br>
+            • 可隨時利用上方工具列新增<b>技術指標 (SMA/EMA/RSI/MACD)</b> 或畫<b>斐波那契</b>來輔助看盤。</p>
+
+            <p><b>3. 如何在圖表上劃線？</b><br>
+            • 按下 <kbd>Alt</kbd> + <kbd>H</kbd> 後點擊圖表任意位置，即可劃設黃色<b>水平線</b>。<br>
+            • 按下 <kbd>Alt</kbd> + <kbd>T</kbd> 依次點擊兩點，即可繪製藍色<b>趨勢線</b>。<br>
+            • 點擊已選取的線條後按下 <kbd>Delete</kbd> 鍵即可隨時刪除。</p>
+
+            <p><b>4. 如何開合約單（做多 / 做空）？</b><br>
+            • 在右側的<b>「合約開倉」</b>面板，先點擊選擇 <b>🟢 做多 (Long)</b> 或是 <b>🔴 做空 (Short)</b>。<br>
+            • 輸入你要投入的保證金金額（USDT），或直接點擊下方百分比（10%、20% 等）。<br>
+            • 設定好預期的<b>目標價 (%)</b> 與<b>停損價 (%)</b>，然後點擊 <b>「開倉」</b> 按鈕即可完成下單。</p>
+
+            <p><b>5. 損益怎麼計算與顯示？</b><br>
+            • 開倉後，行情隨著 K 線推進，系統會即時在右側面板與下方表格計算你的<b>未實現損益 (PnL)</b>、持倉市值與保證金變化。<br>
+            • 當價格觸及你設定的目標或停損，或你手動點擊「平倉」，交易即會結算並計入帳戶現金與手續費。</p>
+
+            <p><b>6. 去哪裡查看統計與匯出數據？</b><br>
+            • 畫面下方的頁籤區塊包含了<b>「未平倉合約」</b>、<b>「歷史記錄」</b>、<b>「交易日誌」</b>與<b>「績效表現 / 統計分析」</b>。<br>
+            • 在各個明細頁籤中，通常備有 <b>「匯出 CSV」</b> 按鈕，點擊即可一鍵將你的所有復盤數據下載保存！</p>
+          </div>
+        </div>
+
+        <div id="fvg-popover" class="popover hidden" role="dialog" aria-label="公允價值缺口">
+          <div class="popover-head">
+            <strong>公允價值缺口</strong>
+            <button id="btn-close-fvg" class="btn icon" aria-label="關閉">&times;</button>
+          </div>
+          <div class="popover-add">
+            <label class="row-flex small"><input type="checkbox" id="fvg-on"> 在螢幕目前的時間週期上顯示缺口 (G)</label>
+            <label class="row-flex small">最小缺口大小
+              <input type="number" id="fvg-min" class="short" min="0" max="10" step="0.05" value="0.1" aria-label="佔價格百分比的最小缺口大小"> % 價格</label>
+            <label class="row-flex small"><input type="checkbox" id="fvg-hide-filled"> 隱藏已填補的缺口</label>
+            <p class="muted small">缺口是第 1 根與第 3 根 K 線之間、被第 2 根 K 線跳過的範圍。綠色：多頭，紅色：空頭。當後續 K 線完全穿越缺口時，方塊會結束並變為灰色。</p>
+          </div>
+          <p id="fvg-summary" class="muted small"></p>
+        </div>
+
+        <div id="indicator-popover" class="popover hidden" role="dialog" aria-label="技術指標">
+          <div class="popover-head">
+            <strong>技術指標</strong>
+            <button id="btn-close-indicators" class="btn icon" aria-label="關閉">&times;</button>
+          </div>
+          <div class="popover-add">
+            <select id="indicator-key" aria-label="指標類型">
+              <option value="SMA">簡單移動平均線 (SMA)</option>
+              <option value="EMA">指數移動平均線 (EMA)</option>
+              <option value="RSI">相對強弱指標 (RSI)</option>
+              <option value="MACD">指數平滑異同移動平均線 (MACD)</option>
+              <option value="Bollinger">布林通道 (Bollinger Bands)</option>
+              <option value="ATR">真實波幅 (ATR)</option>
+              <option value="VolumeDelta">成交量差 (Volume Delta)</option>
+            </select>
+            <div id="indicator-params" class="param-grid"></div>
+            <button id="btn-add-indicator" class="btn primary">新增</button>
+            <p id="indicator-error" class="error hidden" role="alert"></p>
+          </div>
+          <ul id="indicator-list" class="indicator-list"></ul>
+          <label class="row-flex small mtf"><input type="checkbox" id="daily-ema"> 在所有時間週期顯示每日 EMA 200 (S)</label>
+          <p class="muted small">在日內圖表中，每根長條承載上一完整日的數值，因此絕不會使用未來的收盤價。</p>
+        </div>
+      </section>
+
+      <section class="bottom" id="bottom">
+        <div class="tabs" role="tablist" aria-label="交易區塊">
+          <button class="tab swing-only" role="tab" id="tab-open" aria-selected="true" aria-controls="panel-open">未平倉合約 <span id="bucket-count" class="pill">0</span></button>
+          <button class="tab swing-only" role="tab" id="tab-history" aria-selected="false" aria-controls="panel-history">歷史記錄 <span id="history-count" class="pill">0</span></button>
+          <button class="tab swing-only" role="tab" id="tab-journal" aria-selected="false" aria-controls="panel-journal">交易日誌 <span id="journal-count" class="pill">0</span></button>
+          <button class="tab swing-only" role="tab" id="tab-stats" aria-selected="false" aria-controls="panel-stats" title="所有工作階段中，哪些進場理由最有效">統計分析</button>
+          <button class="tab swing-only" role="tab" id="tab-perf" aria-selected="false" aria-controls="panel-perf" title="交易表現評估：數據、權益曲線、回撤、交易次數、月份">績效表現</button>
+          <button class="tab day-only" role="tab" id="tab-day" aria-selected="false" aria-controls="panel-day" title="此日內交易工作階段的所有交易，包含其在退出日 24:00 的截圖">交易明細 <span id="day-trade-count" class="pill">0</span></button>
+          <button class="tab day-only" role="tab" id="tab-auto" aria-selected="false" aria-controls="panel-auto" title="每筆交易的無人看管自動版本：雙胞胎（原始停損與目標，持續運作直至觸及，可跨夜及跨日）、替代方案 1（相同水準，最遲在 24:00 結算）與替代方案 2（相同停損，1:2 目標，最遲在 24:00 結算）。">自動出場 <span id="day-auto-count" class="pill">0</span></button>
+          <button class="tab day-only" role="tab" id="tab-days" aria-selected="false" aria-controls="panel-days" title="每日日誌：每個交易日一行，包含趨勢檢查、當日如何結束、截圖與你的筆記">天數明細 <span id="day-days-count" class="pill">0</span></button>
+          <button class="tab day-only" role="tab" id="tab-cal" aria-selected="false" aria-controls="panel-cal" title="一個月，每週一行（週一至週日）：每日損益與交易數；點擊過去的日子可查看其日誌，點擊未來的日子可跳轉至該日">日曆</button>
+          <button class="tab day-only" role="tab" id="tab-cond" aria-selected="false" aria-controls="panel-cond" title="有/無各進場條件時，已平倉交易的表現如何">進場條件</button>
+          <button type="button" id="btn-bottom" class="btn icon bottom-toggle" aria-expanded="true" aria-controls="bottom" title="縮小交易視窗">&#9662;</button>
+        </div>
+        <div class="tab-panel hidden" id="panel-day" role="tabpanel" aria-labelledby="panel-day">
+          <div class="table-tools">
+            <label class="small muted" for="day-cond-key">篩選</label>
+            <select id="day-cond-key" aria-label="依條件篩選"><option value="all">所有交易</option></select>
+            <button type="button" class="chip on" data-v="all" title="包含符合與不符合條件的交易">全部</button>
+            <button type="button" class="chip" data-v="yes" title="僅限符合條件的交易">是</button>
+            <button type="button" class="chip" data-v="no" title="僅限不符合條件的交易">否</button>
+            <details class="cols-menu" id="day-cols">
+              <summary class="btn small" title="選擇此表格的欄位">隱藏欄位</summary>
+              <div class="cols-list" id="day-cols-list"></div>
+            </details>
+            <span class="info hint" tabindex="0" role="note" title="時間為 UTC。點擊某行可查看截圖與所有儲存欄位。點擊欄位標題可進行排序。" aria-label="時間說明">i</span>
+          </div>
+          <table class="buckets lined" id="day-trade-table">
+            <thead><tr>
+              <th data-col="pic">圖表</th><th class="sortable" data-col="seq" data-key="seq">#</th><th class="sortable" data-col="day" data-key="day_date">日期</th><th class="sortable" data-col="entry" data-key="entry_ms">進場時間</th><th class="sortable" data-col="exit" data-key="exit_ms">出場時間</th>
+              <th class="sortable" data-col="type" data-key="exit_type" title="停損、停利或提前出場">類型</th><th class="num sortable" data-col="held" data-key="hold_hours" title="持有時間">持有時間</th><th data-col="reason" title="原因">原因</th>
+              <th data-col="trend" title="趨勢">趨勢</th>
+              <th data-col="cond" title="條件">條件</th>
+              <th class="num sortable" data-col="conf" data-key="confidence" title="信心度">信心度</th>
+              <th class="sortable" data-col="review" data-key="review_n" title="複查">複查</th>
+              <th class="num sortable" data-col="entry_price" data-key="entry_price">進場價</th><th class="num" data-col="rsi" title="RSI">RSI 15m</th><th class="num" data-col="rsi_1h" title="RSI 1h">RSI 1h</th><th class="num" data-col="atr" title="ATR">ATR</th>
+              <th class="num" data-col="zone" title="區間">區間</th><th class="num" data-col="stop" title="停損">停損</th><th class="num" data-col="target">目標</th><th class="num sortable" data-col="rr" data-key="rr" title="R/R">R/R</th>
+              <th class="num" data-col="coins">數量</th><th class="num" data-col="value" title="價值">價值</th><th class="num" data-col="risk" title="風險">風險</th><th data-col="capped" title="已封頂">已封頂</th><th class="num" data-col="overnight" title="隔夜">隔夜</th>
+              <th class="num" data-col="exit_price">出場價</th><th class="num" data-col="fees" title="手續費">手續費</th><th class="num sortable" data-col="pnl" data-key="pnl" title="損益">損益</th><th class="num sortable" data-col="pnl_pct" data-key="pnl_pct" title="%">%</th><th class="num sortable" data-col="r" data-key="r_multiple" title="R">R</th>
+              <th class="num sortable" data-col="mae" data-key="mae_pct" title="MAE %">MAE %</th><th class="num sortable" data-col="mfe" data-key="mfe_pct" title="MFE %">MFE %</th>
+              <th class="num sortable" data-col="mae_r" data-key="mae_r" title="MAE R">MAE R</th><th class="num sortable" data-col="mfe_r" data-key="mfe_r" title="MFE R">MFE R</th>
+              <th class="num" data-col="hi_exit" title="出場後 MFE">出場後 MFE</th><th class="num" data-col="lo_exit" title="出場後 MAE">出場後 MAE</th>
+              <th class="num" data-col="mfe_after_r" title="出場後 MFE R">出場後 MFE R</th><th class="num" data-col="mae_after_r" title="出場後 MAE R">出場後 MAE R</th>
+              <th class="num" data-col="hi_entry" title="高點 vs 進場">高點 vs 進場</th><th class="num" data-col="lo_entry" title="低點 vs 進場">低點 vs 進場</th><th data-col="notes">備註</th>
+            </tr></thead>
+            <tbody id="day-trade-list"></tbody>
+          </table>
+          <p id="day-trade-empty" class="muted small">尚無交易。</p>
+        </div>
+        <div class="tab-panel hidden" id="panel-auto" role="tabpanel" aria-labelledby="panel-auto">
+          <div class="table-tools">
+            <span id="auto-summary" class="small mono"></span>
+            <span class="spacer"></span>
+            <span class="info" tabindex="0" role="note" title="自動出場說明">i</span>
+          </div>
+          <table class="buckets" id="day-auto-table" aria-label="自動出場">
+            <thead><tr>
+              <th>#</th><th>日期</th><th>進場時間</th><th class="num">進場價</th><th class="num">停損</th><th class="num">目標</th>
+              <th>出場</th><th>類型</th><th class="num">出場價</th><th class="num">持有時間</th><th class="num">損益</th><th class="num">%</th><th class="num">R</th>
+              <th>手動出場</th><th class="num">手動持有</th><th class="num">手動損益</th><th class="num">差額</th>
+              <th>替代1 出場</th><th class="num">替代1 損益</th><th class="num">替代1 R</th>
+              <th class="num">替代2 目標</th><th>替代2 出場</th><th class="num">替代2 損益</th><th class="num">替代2 R</th>
+              <th>A 出場</th><th class="num">A 損益</th><th class="num">A R</th>
+              <th>C 出場</th><th class="num">C 損益</th><th class="num">C R</th>
+            </tr></thead>
+            <tbody id="day-auto-list"></tbody>
+          </table>
+          <p id="day-auto-empty" class="muted small hidden">尚無自動雙胞胎。</p>
+        </div>
+        <div class="tab-panel hidden" id="panel-cal" role="tabpanel" aria-labelledby="panel-cal">
+          <div class="table-tools">
+            <button type="button" id="btn-cal-prev" class="btn small" title="上個月">&lsaquo;</button>
+            <b id="cal-title" class="mono"></b>
+            <button type="button" id="btn-cal-next" class="btn small" title="下個月">&rsaquo;</button>
+            <button type="button" id="btn-cal-now" class="btn small">目前</button>
+            <span id="cal-summary" class="small muted"></span>
+            <span class="spacer"></span>
+          </div>
+          <table class="cal" id="cal-table" aria-label="交易日曆">
+            <thead><tr><th>週一</th><th>週二</th><th>週三</th><th>週四</th><th>週五</th><th>週六</th><th>週日</th><th class="week">週總計</th></tr></thead>
+            <tbody id="cal-body"></tbody>
+          </table>
+        </div>
+        <div class="tab-panel hidden" id="panel-cond" role="tabpanel" aria-labelledby="panel-cond">
+          <div class="table-tools">
+            <span class="small muted">範圍</span>
+            <button type="button" class="chip on" data-scope="session">本工作階段</button>
+            <button type="button" class="chip" data-scope="all">所有日內工作階段</button>
+            <span id="cond-summary" class="small muted"></span>
+            <span class="spacer"></span>
+            <a id="btn-cond-csv" class="btn small-btn" href="#" download>匯出 CSV</a>
+          </div>
+          <table class="buckets" id="cond-table">
+            <thead><tr>
+              <th>條件</th>
+              <th class="num first">符合：交易數</th><th class="num">符合：勝率 %</th><th class="num">符合：平均 R</th><th class="num">符合：損益</th>
+              <th class="num first">不符合：交易數</th><th class="num">不符合：勝率 %</th><th class="num">不符合：平均 R</th><th class="num">不符合：損益</th>
+              <th class="num first">未知</th>
+            </tr></thead>
+            <tbody id="cond-list"></tbody>
+          </table>
+          <p id="cond-empty" class="muted small">尚無已平倉交易。</p>
+        </div>
+        <div class="tab-panel hidden" id="panel-days" role="tabpanel" aria-labelledby="panel-days">
+          <div class="table-tools">
+            <span class="spacer"></span>
+            <a id="btn-days-csv" class="btn small-btn" href="#" download>匯出 CSV</a>
+          </div>
+          <table class="buckets" id="day-days-table">
+            <thead><tr>
+              <th>圖表</th><th>日期</th><th>收盤 &gt; EMA 200</th>
+              <th>結果</th><th>離開時間</th>
+              <th>交易</th><th class="num">損益</th><th class="num">%</th><th class="num">R</th><th>備註</th>
+            </tr></thead>
+            <tbody id="day-days-list"></tbody>
+          </table>
+          <p id="day-days-empty" class="muted small">尚無天數記錄。</p>
+        </div>
+        <div class="tab-panel" id="panel-open" role="tabpanel" aria-labelledby="panel-open">
+          <div class="table-tools" id="open-tools" role="group" aria-label="依開倉時的 RSI 篩選未平倉交易">
+            <span class="muted small">開倉 RSI：</span>
+            <button type="button" class="chip on" data-f="all">全部</button>
+            <button type="button" class="chip" data-f="below">低於 30</button>
+            <button type="button" class="chip" data-f="above">高於 30</button>
+          </div>
+          <table class="buckets" id="bucket-table">
+            <thead><tr>
+              <th>#</th><th>開倉日期 (UTC)</th><th class="num">持有時間</th><th class="num">數量</th><th class="num">價格</th><th class="num">RSI</th><th class="num">手續費</th>
+              <th class="num">總成本</th><th class="num">現值</th><th class="num">損益</th><th class="num">%</th>
+              <th class="num">止盈位(%)</th>
+              <th class="num">停損位(%)</th>
+              <th>抵達目標價格(盈/損)自動平倉</th>
+              <th>部份平倉</th>
+            </tr></thead>
+            <tbody id="bucket-list"></tbody>
+            <tfoot><tr id="bucket-now" class="now hidden"></tr></tfoot>
+          </table>
+          <p id="bucket-empty" class="muted small">沒有未平倉的合約。</p>
+        </div>
+        <div class="tab-panel hidden" id="panel-history" role="tabpanel" aria-labelledby="panel-history">
+          <div class="table-tools" id="history-tools" role="group" aria-label="依開倉時的 RSI 篩選歷史記錄">
+            <span class="muted small">開倉 RSI：</span>
+            <button type="button" class="chip on" data-f="all">全部</button>
+            <button type="button" class="chip" data-f="below">低於 30</button>
+            <button type="button" class="chip" data-f="above">高於 30</button>
+          </div>
+          <table class="buckets" id="history-table">
+            <thead><tr>
+              <th>#</th><th>開倉日期 (UTC)</th><th>平倉日期 (UTC)</th><th class="num">持有時間</th><th class="num">數量</th><th class="num">開倉價</th>
+              <th class="num">平倉價</th><th class="num">開倉 RSI</th><th class="num">平倉 RSI</th><th class="num">EMA200 變動</th><th class="num">vs EMA 變動</th><th class="num">手續費</th><th class="num">總成本</th><th class="num">收入</th><th class="num">損益</th><th class="num">%</th>
+              <th class="num">目標</th><th class="num">停損</th>
+              <th>出場方式</th>
+              <th class="num">最高價</th><th class="num">最高 %</th>
+              <th class="num">最低價</th><th class="num">最低 %</th>
+            </tr></thead>
+            <tbody id="history-list"></tbody>
+          </table>
+          <p id="history-empty" class="muted small">尚無已平倉的合約。</p>
+        </div>
+        <div class="tab-panel hidden" id="panel-journal" role="tabpanel" aria-labelledby="panel-journal">
+          <div class="table-tools" id="journal-tools" role="group" aria-label="篩選交易日誌">
+            <span class="muted small">顯示：</span>
+            <button type="button" class="chip on" data-side="all">全部</button>
+            <button type="button" class="chip" data-side="buy">做多</button>
+            <button type="button" class="chip" data-side="sell">做空</button>
+            <a id="btn-journal-csv" class="btn small-btn" href="#" download>匯出 CSV</a>
+          </div>
+          <table class="buckets" id="journal-table">
+            <thead><tr>
+              <th>圖表</th><th>方向</th><th>#</th><th>日期 (UTC)</th><th>週期</th><th class="num">價格</th><th class="num">數量</th>
+              <th class="num">RSI</th><th class="num">%B</th>
+              <th class="num">EMA200</th><th class="num">歷史高點</th><th class="num">歷史低點</th><th class="num">vs 開倉</th>
+              <th class="num">vs 平倉</th><th>策略</th><th>燈號</th>
+              <th>理由</th>
+              <th class="num">損益</th><th class="num">%</th><th class="num">持有時間</th>
+            </tr></thead>
+            <tbody id="journal-list"></tbody>
+          </table>
+          <p id="journal-empty" class="muted small">尚無交易。</p>
+        </div>
+        <div class="tab-panel hidden" id="panel-stats" role="tabpanel" aria-labelledby="panel-stats">
+          <div class="table-tools" id="stats-tools" role="group" aria-label="理由統計">
+            <span class="muted small">所有工作階段的進場理由統計：</span>
+            <select id="stats-symbol" aria-label="幣種"><option value="">所有幣種</option></select>
+            <span id="stats-summary" class="muted small hint"></span>
+          </div>
+          <div class="stats-grid">
+            <table class="buckets stats" id="stats-buy-table" aria-label="開倉理由">
+              <thead><tr>
+                <th>開倉理由</th>
+                <th class="num">已勾選</th>
+                <th class="num">平均損益 %</th>
+                <th class="num">未勾選</th>
+                <th class="num">平均損益 %</th>
+              </tr></thead>
+              <tbody id="stats-buy"></tbody>
+            </table>
+            <table class="buckets stats" id="stats-sell-table" aria-label="平倉理由">
+              <thead><tr>
+                <th>平倉理由</th>
+                <th class="num">已勾選</th>
+                <th class="num">平均損益 %</th>
+              </tr></thead>
+              <tbody id="stats-sell"></tbody>
+            </table>
+          </div>
+          <p id="stats-empty" class="muted small">尚無交易記錄。</p>
+        </div>
+        <div class="tab-panel hidden" id="panel-perf" role="tabpanel" aria-labelledby="panel-perf">
+          <div class="table-tools" id="perf-tools" role="group" aria-label="績效評估範圍">
+            <span class="muted small">評估範圍：</span>
+            <button type="button" class="chip on" data-scope="session">本工作階段</button>
+            <button type="button" class="chip" data-scope="all">所有工作階段</button>
+            <span id="perf-summary" class="muted small hint"></span>
+          </div>
+          <div class="perf-tiles" id="perf-tiles"></div>
+          <div class="perf-grid" id="perf-grid">
+            <section class="perf-card perf-equity"><h3 id="perf-equity-title">權益曲線</h3><div class="perf-canvas" id="perf-equity"><canvas aria-label="權益曲線"></canvas></div></section>
+            <section class="perf-card perf-donut"><h3>勝負分佈</h3><div class="perf-canvas" id="perf-donut"><canvas aria-label="勝負分佈"></canvas></div></section>
+            <section class="perf-card perf-bars"><h3>每筆交易損益</h3><div class="perf-canvas" id="perf-bars"><canvas aria-label="每筆交易損益"></canvas></div></section>
+            <section class="perf-card perf-months"><h3>每月報酬</h3><div id="perf-months"></div></section>
+          </div>
+          <p id="perf-empty" class="muted small hidden">請開啟一個工作階段。</p>
+        </div>
+      </section>
+    </section>
+
+    <aside class="side" id="side">
+      <section class="card day-only" id="day-card" data-fold>
+        <div class="card-head"><h2><button type="button" class="fold" aria-expanded="true">日內交易</button></h2><span class="card-sum mono small"></span></div>
+        <div class="row-flex day-head"><div class="day-when"><b id="day-date" class="mono">&ndash;</b><span id="day-time" class="mono muted small"></span></div><span class="spacer"></span><span id="day-phase" class="badge"></span></div>
+        <dl class="kv mtf">
+          <dt>收盤 &gt; EMA 200</dt><dd id="day-ema" class="mono gauge small">&ndash;</dd>
+        </dl>
+        <p id="day-gate" class="small muted" role="status"></p>
+        <div class="row-flex">
+          <button type="button" id="btn-day-new" class="btn buy" title="新合約交易">新合約交易</button>
+          <button type="button" id="btn-day-sell" class="btn sell" title="平倉">平倉</button>
+          <span class="spacer"></span>
+          <button type="button" id="btn-day-skip" class="btn small" title="跳過這天">跳過這天 &rarr; 00:00</button>
+        </div>
+        <div class="review-inline hidden" id="day-exit-choice" role="group" aria-labelledby="dx-title">
+          <b id="dx-title" class="small">交易已平倉</b>
+          <p id="dx-sub" class="small muted"></p>
+          <div class="row-flex">
+            <button type="button" id="btn-dx-end" class="btn small primary">結束這天 &rarr; 00:00 <kbd>Enter</kbd></button>
+            <button type="button" id="btn-dx-keep" class="btn small">繼續交易 <kbd>K</kbd></button>
+          </div>
+        </div>
+        <form class="review-inline hidden" id="day-review" autocomplete="off" aria-labelledby="dr-title">
+          <b id="dr-title" class="small">交易複查</b>
+          <p id="dr-sub" class="small muted"></p>
+          <p id="dr-window" class="small"></p>
+          <div class="review-list" id="dr-list">
+            <div class="review-row"><button type="button" class="btn rv-toggle" data-key="stop_tight" aria-pressed="false">false</button><span class="review-label">停損太緊 <kbd>1</kbd></span></div>
+            <div class="review-row"><button type="button" class="btn rv-toggle" data-key="over_target" aria-pressed="false">false</button><span class="review-label">價格後來超過目標 <kbd>2</kbd></span></div>
+            <div class="review-row"><button type="button" class="btn rv-toggle" data-key="stop_saved" aria-pressed="false">false</button><span class="review-label">停損救了我 <kbd>3</kbd></span></div>
+            <div class="review-row"><button type="button" class="btn rv-toggle" data-key="stop_moved_up" aria-pressed="false">false</button><span class="review-label">我把停損拉得太高了 <kbd>4</kbd></span></div>
+          </div>
+          <p id="dr-error" class="error small" role="alert"></p>
+          <div class="row-flex"><button type="submit" id="btn-dr-save" class="btn small primary">儲存複查 <kbd>Enter</kbd></button></div>
+        </form>
+        <div class="sub" id="day-notes-sub" data-fold>
+          <div class="sub-head"><button type="button" class="fold small muted" aria-expanded="true">當日筆記</button> <span id="day-notes-state" class="mono small muted"></span></div>
+          <textarea id="day-notes" rows="3" maxlength="4000" aria-label="當日筆記" placeholder="你看到了什麼……（自動儲存）"></textarea>
+        </div>
+        <dl class="kv mtf hidden" id="day-trade">
+          <dt class="total">未平倉合約</dt><dd id="dt-seq" class="total small"></dd>
+          <dt>進場</dt><dd id="dt-entry" class="mono">&ndash;</dd>
+          <dt>自開倉起</dt><dd id="dt-change" class="mono gauge">&ndash;</dd>
+          <dt>停損</dt><dd id="dt-stop" class="mono">&ndash;</dd>
+          <dt>目標</dt><dd id="dt-tp" class="mono">&ndash;</dd>
+          <dt>規模</dt><dd id="dt-size" class="mono small">&ndash;</dd>
+          <dt>風險 · R/R</dt><dd id="dt-risk" class="mono">&ndash;</dd>
+          <dt>自動雙胞胎</dt><dd id="dt-auto" class="mono small">&ndash;</dd>
+          <dt>出場 A / C</dt><dd id="dt-ac" class="mono small">&ndash;</dd>
+          <dt>目前損益</dt><dd id="dt-pnl" class="mono gauge">&ndash;</dd>
+        </dl>
+        <div class="sub" id="day-zones-sub" data-fold>
+          <div class="row-flex mtf sub-head">
+            <h2 style="margin:0"><button type="button" class="fold" aria-expanded="true">區間 <span id="day-zone-count" class="pill">0</span></button></h2>
+            <span class="spacer"></span>
+            <button type="button" id="btn-day-zone" class="btn small" title="繪製區間 (Z)">繪製區間 (Z)</button>
+          </div>
+          <ul id="day-zones" class="indicator-list zones" aria-label="支撐 / 阻力區間"></ul>
+          <p id="day-zones-empty" class="muted small">尚無區間。</p>
+        </div>
+      </section>
+
+      <section class="card day-only" id="day-signal-card" data-fold>
+        <div class="card-head"><h2><button type="button" class="fold" aria-expanded="true">策略訊號</button></h2><span class="card-sum mono small"></span></div>
+        <div class="row-flex">
+          <select id="day-strategy" aria-label="跳轉策略"></select>
+          <span class="spacer"></span>
+          <button type="button" id="btn-day-signal" class="btn small primary" title="下一個訊號 (E)">下一個訊號 (E)</button>
+        </div>
+        <p id="day-strategy-note" class="muted small"></p>
+        <p id="day-signal-last" class="small" role="status"></p>
+      </section>
+
+      <section class="card swing-only" id="strategy-card" data-fold>
+        <div class="card-head"><h2><button type="button" class="fold" aria-expanded="true">策略</button></h2><span class="card-sum mono small"></span></div>
+        <div class="row-flex">
+          <select id="strategy-key" aria-label="策略"><option value="">無</option></select>
+          <button id="btn-strategy-params" class="btn icon" title="策略參數" aria-label="策略參數" aria-expanded="false">&#x2699;</button>
+        </div>
+        <div id="strategy-params" class="param-grid hidden"></div>
+        <p id="strategy-error" class="error small hidden" role="alert"></p>
+        <div class="lights" id="lights" aria-live="polite">
+          <div class="lamp" id="lamp-enter"><span class="dot"></span><span class="lbl">進場 (ENTER)</span></div>
+          <div class="lamp" id="lamp-exit"><span class="dot"></span><span class="lbl">出場 (EXIT)</span></div>
+        </div>
+        <p id="strategy-note" class="muted small">未選定策略。</p>
+      </section>
+
+      <section class="card" id="gauge-card" aria-live="polite" data-fold>
+        <div class="card-head"><h2><button type="button" class="fold" aria-expanded="true">市場讀數</button></h2><span class="card-sum mono small"></span></div>
+        <dl class="kv" id="gauges">
+          <dt id="gauge-rsi-label">RSI 14</dt><dd id="gauge-rsi" class="mono gauge">&ndash;</dd>
+          <dt>EMA 200 (1D)</dt><dd id="gauge-ema" class="mono">&ndash;</dd>
+          <dt>價格 vs EMA</dt><dd id="gauge-ema-pct" class="mono gauge">&ndash;</dd>
+          <dt id="gauge-res-label">阻力</dt><dd id="gauge-res" class="mono gauge">&ndash;</dd>
+          <dt id="gauge-sup-label">支撐</dt><dd id="gauge-sup" class="mono gauge">&ndash;</dd>
+          <dt id="gauge-bb-label">%B (BB 20/2)</dt><dd id="gauge-bb" class="mono gauge">&ndash;</dd>
+          <dt>通道寬度</dt><dd id="gauge-bbw" class="mono">&ndash;</dd>
+          <dt id="gauge-buy-label" class="hidden">vs 上次開倉</dt><dd id="gauge-buy" class="mono gauge hidden">&ndash;</dd>
+          <dt id="gauge-sell-label" class="hidden">vs 上次平倉</dt><dd id="gauge-sell" class="mono gauge hidden">&ndash;</dd>
+        </dl>
+      </section>
+
+      <section class="card" id="extremes-card" data-fold>
+        <div class="card-head"><h2><button type="button" class="fold" aria-expanded="true">高低點極值</button></h2><span class="info" tabindex="0" role="note" title="極值">i</span><span class="card-sum mono small"></span></div>
+        <div class="extremes" id="extremes">
+          <div class="extreme" data-key="all"><span class="ex-label">歷史全時</span><span class="ex-low mono gauge">&ndash;</span><div class="ex-bar"><span class="ex-fill"></span><span class="ex-marker"></span></div><span class="ex-high mono gauge">&ndash;</span></div>
+          <div class="extreme" data-key="1y"><span class="ex-label">1 年</span><span class="ex-low mono gauge">&ndash;</span><div class="ex-bar"><span class="ex-fill"></span><span class="ex-marker"></span></div><span class="ex-high mono gauge">&ndash;</span></div>
+          <div class="extreme" data-key="6m"><span class="ex-label">6 個月</span><span class="ex-low mono gauge">&ndash;</span><div class="ex-bar"><span class="ex-fill"></span><span class="ex-marker"></span></div><span class="ex-high mono gauge">&ndash;</span></div>
+          <div class="extreme" data-key="3m"><span class="ex-label">3 個月</span><span class="ex-low mono gauge">&ndash;</span><span class="ex-bar"><span class="ex-fill"></span><span class="ex-marker"></span></div><span class="ex-high mono gauge">&ndash;</span></div>
+        </div>
+      </section>
+
+      <section class="card" id="account-card" data-fold>
+        <div class="card-head"><h2><button type="button" class="fold" aria-expanded="true">帳戶</button></h2><span class="card-sum mono small"></span></div>
+        <dl class="kv" id="account">
+          <dt>現金餘額</dt><dd id="acc-cash" class="mono">&ndash;</dd>
+          <dt>已投入保證金</dt><dd id="acc-invested" class="mono">&ndash;</dd>
+          <dt>持倉市值</dt><dd id="acc-mv" class="mono">&ndash;</dd>
+          <dt>未實現損益</dt><dd id="acc-unreal" class="mono">&ndash;</dd>
+          <dt>已實現損益</dt><dd id="acc-real" class="mono">&ndash;</dd>
+          <dt>已付手續費</dt><dd id="acc-fees" class="mono">&ndash;</dd>
+          <dt class="total">帳戶權益</dt><dd id="acc-equity" class="mono total">&ndash;</dd>
+          <dt>總報酬</dt><dd id="acc-return" class="mono">&ndash;</dd>
+        </dl>
+      </section>
+
+      <!-- 合約開倉面板 (支援做多 / 做空) -->
+<section class="card swing-only" id="trade-card" data-fold>
+        <div class="card-head"><h2><button type="button" class="fold" aria-expanded="true">合約開倉</button></h2><span class="card-sum mono small"></span></div>
+        
+        <!-- 多空切換按鈕群組 -->
+        <div class="row-flex mtf" style="gap: 8px; margin-bottom: 8px;" role="group" aria-label="合約方向">
+          <button type="button" id="btn-side-long" class="btn buy" style="flex: 1;" aria-pressed="true">🟢 做多 (Long)</button>
+          <button type="button" id="btn-side-short" class="btn" style="flex: 1; background: #3a2325; color: #ff5252;" aria-pressed="false">🔴 做空 (Short)</button>
+        </div>
+
+        <div class="row-flex">
+          <input id="buy-amount" type="number" min="1" step="any" placeholder="保證金 USDT" aria-label="保證金 (USDT)">
+          <button id="btn-buy" class="btn buy">開倉(倉位總價)</button>
+        </div>
+        <div class="presets" id="buy-presets">
+          <button type="button" class="btn small" data-pct="5">5%</button>
+          <button type="button" class="btn small" data-pct="10">10%</button>
+          <button type="button" class="btn small" data-pct="20">20%</button>
+          <button type="button" class="btn small" data-pct="40">40%</button>
+        </div>
+        <div class="row-flex mtf plan-row">
+          <label class="small row-flex">止盈價 <input id="buy-tp" type="number" step="any" placeholder="例如 20000" class="short" style="width: 85px;" aria-label="止盈目標價"></label>
+          <label class="small row-flex">停損價 <input id="buy-sl" type="number" step="any" placeholder="例如 5000" class="short" style="width: 85px;" aria-label="停損目標價"></label>
+        </div>
+        <div class="row-flex mtf">
+          <button type="button" id="btn-whole" class="btn small" aria-pressed="false" title="整數合約">整數合約</button>
+          <label id="buy-coins-wrap" class="row-flex small hidden">數量 <input id="buy-coins" type="number" min="1" step="1" class="short" placeholder="0" aria-label="數量"></label>
+        </div>
+        <p id="buy-estimate" class="muted small mono"></p>
+      </section>
+
+    </aside>
+  </main>
+
+  <footer class="controls">
+    <button id="btn-reset" class="btn icon" title="回到起點 (R)">&#x25C0;&#xFE0E;</button>
+    <button id="btn-step-back" class="btn icon hidden" title="後退一根 K 線">&#x23EE;</button>
+    <button id="btn-play" class="btn icon play" title="播放 / 暫停 (P)">&#x25B6;</button>
+    <button id="btn-step" class="btn icon" title="前進一根 K 線">&#x23ED;</button>
+    <span class="step-info">步幅：<span id="step-size" class="mono">&ndash;</span></span>
+    <button type="button" id="btn-day-ema" class="btn small day-only" title="下一日 > EMA">下一日 &gt; EMA</button>
+    <label class="speed">速度
+      <input id="speed" type="range" min="1" max="10" value="2" aria-label="速度">
+      <span id="speed-label" class="mono">2/s</span>
+    </label>
+    <div class="progress" id="progress" title="回放進度"><div id="progress-bar"></div></div>
+    <span id="progress-text" class="mono muted"></span>
+    <span id="status-badge" class="badge hidden"></span>
+  </footer>
+
+  <dialog id="dlg-snapshot" class="dialog snap-dialog" aria-labelledby="snap-title">
+    <div class="popover-head">
+      <h2 id="snap-title">快照</h2>
+      <button type="button" id="btn-snap-review" class="btn small hidden">編輯複查</button>
+      <button id="btn-close-snapshot" class="btn icon" aria-label="關閉">&times;</button>
+    </div>
+    <div class="snap-layout">
+      <div class="snap-pic"><img id="snap-img" alt="圖表"><p id="snap-nopic" class="muted small hidden">無圖片</p></div>
+      <div class="snap-readings"><table class="kv-table"><tbody id="snap-readings"></tbody></table>
+        <div id="snap-notes-wrap" class="hidden">
+          <label class="small muted" for="snap-notes">當日筆記</label>
+          <textarea id="snap-notes" rows="6" maxlength="4000"></textarea>
+          <div class="row-flex"><button type="button" id="btn-snap-notes-save" class="btn small primary">儲存筆記</button><span id="snap-notes-state" class="small muted"></span></div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-reasons" class="dialog reasons-dialog" aria-labelledby="reasons-title">
+    <form id="form-reasons">
+      <div class="popover-head">
+        <h2 id="reasons-title">理由？</h2>
+        <button type="button" id="btn-close-reasons" class="btn icon" aria-label="關閉">&times;</button>
+      </div>
+      <p id="reasons-sub" class="muted small">勾選符合的理由。</p>
+      <div id="reasons-list" class="reasons-grid" role="group" aria-label="理由"></div>
+    <!-- 💖 小居專屬：輸入框直接寫在 HTML 裡（絕對看的到！） 💖 -->
+    <div class="custom-reason-add-box" style="display: flex; gap: 8px; margin: 10px 0; align-items: center;">
+      <input type="text" id="input-new-reason" placeholder="輸入新的開單理由..." style="flex: 1; padding: 6px 10px; border-radius: 4px; border: 1px solid #444; background: #1e1e1e; color: #fff; font-size: 0.85rem; outline: none;">
+      <button type="button" id="btn-add-custom-reason" class="btn primary small" style="white-space: nowrap; padding: 6px 12px; font-size: 0.85rem;">＋ 新增理由</button>
+    </div>
+      <label class="reasons-note">備註 <input id="reasons-note" type="text" maxlength="500" autocomplete="off"></label>
+      <div class="dialog-actions">
+        <span id="reasons-version" class="muted small"></span>
+        <button type="button" class="btn" id="btn-cancel-reasons">取消</button>
+        <button type="submit" class="btn primary" id="btn-confirm-reasons">確認</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-review" class="dialog review-dialog" aria-labelledby="review-title">
+    <form id="form-review">
+      <h2 id="review-title">複查</h2>
+      <p id="review-sub" class="muted small"></p>
+      <p id="review-window" class="small"></p>
+      <div class="review-list" id="review-list">
+        <div class="review-row"><button type="button" class="btn rv-toggle" data-key="stop_tight" aria-pressed="false">false</button><span class="review-label">停損太緊 <kbd>1</kbd></span></div>
+        <div class="review-row"><button type="button" class="btn rv-toggle" data-key="over_target" aria-pressed="false">false</button><span class="review-label">價格後來超過目標 <kbd>2</kbd></span></div>
+        <div class="review-row"><button type="button" class="btn rv-toggle" data-key="stop_saved" aria-pressed="false">false</button><span class="review-label">停損救了我 <kbd>3</kbd></span></div>
+        <div class="review-row"><button type="button" class="btn rv-toggle" data-key="stop_moved_up" aria-pressed="false">false</button><span class="review-label">我把停損拉得太高了 <kbd>4</kbd></span></div>
+      </div>
+      <p class="muted small" id="review-help">更改標記並儲存。</p>
+      <p id="review-error" class="error small" role="alert"></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn" id="btn-review-cancel">取消</button>
+        <button type="submit" class="btn primary" id="btn-review-save">儲存複查</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-exit" class="dialog reasons-dialog sell" aria-labelledby="exit-title">
+    <form id="form-exit">
+      <div class="popover-head">
+        <h2 id="exit-title">平倉</h2>
+        <button type="button" id="btn-exit-cancel" class="btn icon" aria-label="關閉">&times;</button>
+      </div>
+      <p class="muted small">提前平倉。</p>
+      <div class="exit-legs" id="exit-legs" role="radiogroup" aria-label="出場部位">
+        <span class="small muted">關閉</span>
+        <label class="chip"><input type="radio" name="exit-legs" value="A"> A</label>
+        <label class="chip"><input type="radio" name="exit-legs" value="C"> C</label>
+        <label class="chip"><input type="radio" name="exit-legs" value="both"> 兩者</label>
+        <span class="info" tabindex="0" role="note" title="A 與 C 說明">i</span>
+      </div>
+      <div id="exit-reasons" class="reasons-grid exit-grid" role="radiogroup" aria-label="平倉理由"></div>
+      <label class="reasons-note">備註 <input id="exit-note" type="text" maxlength="500" autocomplete="off"></label>
+      <p id="exit-error" class="error small" role="alert"></p>
+      <div class="dialog-actions">
+        <button type="submit" class="btn sell" id="btn-exit-confirm">立即平倉</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-session" class="dialog">
+    <form method="dialog" id="form-session">
+      <h2>新增回放工作階段</h2>
+      <div class="form-grid">
+        <label class="wide">模式 <select name="mode" id="f-mode">
+          <option value="swing">合約波段交易（合約倉位）</option>
+          <option value="day">日內合約交易（15分鐘 K 線、UTC 日曆時鐘、每筆交易 0.1% 風險）</option>
+        </select></label>
+        <label>幣種 <select name="symbol" id="f-symbol" required></select></label>
+        <label id="f-base-wrap">基礎時間週期 <select name="base_interval" id="f-base"></select></label>
+        <label>起始日期 
+          <div style="display: flex; gap: 6px; align-items: center; margin-top: 4px;">
+            <input name="start" id="f-start" type="date" required style="flex: 1;">
+            <button type="button" id="btn-random-date" class="btn small" style="white-space: nowrap;" title="隨機抽選一個起始日期">🎲 隨機日期</button>
+          </div>
+        </label>
+        <label>長度 <select name="length" id="f-length">
+          <option value="now" selected>直到現在</option>
+          <option value="1">1 年</option>
+          <option value="2">2 年</option>
+          <option value="5">5 年</option>
+          <option value="custom">自訂結束日期</option>
+        </select></label>
+        <label>結束日期 <span class="muted" id="f-end-note">（直到現在）</span> <input name="end" id="f-end" type="date"></label>
+        <label>起始資金 (USDT) <input name="start_balance" id="f-balance" type="number" min="1" step="any" value="10000" required></label>
+        <label id="f-fee-wrap">單邊手續費 (%) <input name="fee_pct" id="f-fee" type="number" min="0" max="9.99" step="0.01" value="0.1" required></label>
+        <label class="wide">名稱 <span class="muted">（選填）</span> <input name="name" id="f-name" type="text" maxlength="80" placeholder="例如：2025 BTC 合約特訓"></label>
+      </div>
+      <p class="muted small" id="f-note-swing">基礎時間週期。</p>
+      <p class="muted small hidden" id="f-note-day">日內合約交易模式。</p>
+      <p id="form-error" class="error hidden"></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn" id="btn-cancel-session">取消</button>
+        <button type="submit" class="btn primary" id="btn-create-session">建立</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <script type="module" src="/static/js/app.js"></script>
+<!-- 💖 小居專屬：極速穩定版控制邏輯 💖 -->
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const zhReasonsMap = {
+        'At support': '📍 關鍵價格拒絕',
+        'Above EMA 200': '高不過高or低不過低(雙頂/底)',
+        'Fibonacci level (38.2/50/61.8 %)': '🎯 斐波那契回撤黃金位 (0.618/0.382)',
+        'Bounce candle (long lower wick)': '🕯️ 反彈 K 線（長影線/錘子線）',
+        'Breakout above resistance': '🚀 強勢突破阻力位(訊號K)',
+        'RSI low (<30)': '📉 真空區',
+        'Lower Bollinger band': '🔔 我就想開單(手癢)',
+        'High volume at support': '📊 支撐位出現高成交量 / 爆量',
+        'RSI divergence up': '⚡ RSI 頂/底背離',
+        'Big drop from recent high (>=15 %)': '💥 消息面',
+        'Other': '📝 符合計畫'
+      };
+
+      const STORAGE_KEY = 'custom_trade_reasons_v1';
+      const getCustom = () => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; } catch(e) { return []; } };
+      const setCustom = (data) => localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+
+      function updateUI() {
+        const list = document.getElementById('reasons-list');
+        if (!list) return;
+
+        // 1. 翻譯英文選項
+        list.querySelectorAll('label:not(.custom-reason-item)').forEach(label => {
+          for (let node of label.childNodes) {
+            if (node.nodeType === Node.TEXT_NODE) {
+              const text = node.textContent.trim();
+              if (zhReasonsMap[text]) node.textContent = ' ' + zhReasonsMap[text];
+            }
+          }
+        });
+
+        // 2. 渲染使用者自訂新增的選項
+        list.querySelectorAll('.custom-reason-item').forEach(el => el.remove());
+        getCustom().forEach((reasonText, idx) => {
+          const label = document.createElement('label');
+          label.className = 'custom-reason-item';
+          label.style.cssText = 'display: inline-flex; align-items: center; gap: 6px; cursor: pointer; background: rgba(255,255,255,0.06); padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1); margin: 2px;';
+          label.innerHTML = `
+            <input type="checkbox" name="reasons" value="custom_${idx}_${reasonText}">
+            <span style="font-size: 0.85rem;">✨ ${reasonText}</span>
+            <button type="button" class="btn-del-reason" title="刪除" style="background:none; border:none; color:#ff5252; cursor:pointer; font-weight:bold; padding:0 2px; margin-left:4px; font-size:1rem;">&times;</button>
+          `;
+          label.querySelector('.btn-del-reason').addEventListener('click', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            const items = getCustom();
+            items.splice(idx, 1);
+            setCustom(items);
+            updateUI();
+          });
+          list.appendChild(label);
+        });
+      }
+
+      // 綁定輸入框與按鈕邏輯
+      const inputNew = document.getElementById('input-new-reason');
+      const btnAdd = document.getElementById('btn-add-custom-reason');
+      const handleAdd = () => {
+        if (!inputNew) return;
+        const val = inputNew.value.trim();
+        if (!val) return;
+        const items = getCustom();
+        if (!items.includes(val)) {
+          items.push(val);
+          setCustom(items);
+          updateUI();
+        }
+        inputNew.value = '';
+      };
+
+      if (btnAdd) btnAdd.addEventListener('click', handleAdd);
+      if (inputNew) inputNew.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); handleAdd(); }
+      });
+
+      // 定時巡檢刷新 UI（極輕量且絕對不會卡死或漏掉）
+      setInterval(updateUI, 300);
+    });
+  </script>
+ <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // 開倉目標價格自動轉換為背景百分比 (極速攔截版) 
+      const btnBuy = document.getElementById('btn-buy');
+      if (btnBuy) {
+        btnBuy.addEventListener('click', (e) => {
+          let currentPrice = 0;
+          const priceEl = document.getElementById('cursor-price');
+          if (priceEl && priceEl.textContent) {
+            currentPrice = parseFloat(priceEl.textContent.replace(/,/g, ''));
+          }
+          if (!currentPrice || isNaN(currentPrice)) {
+            const legendText = document.getElementById('legend')?.textContent || '';
+            const match = legendText.match(/C\s*([\d,.]+)/);
+            if (match) currentPrice = parseFloat(match[1].replace(/,/g, ''));
+          }
+
+          const isLong = document.getElementById('btn-side-long')?.getAttribute('aria-pressed') === 'true';
+          const tpInput = document.getElementById('buy-tp');
+          const slInput = document.getElementById('buy-sl');
+
+          if (tpInput && slInput && currentPrice > 0) {
+            const origTp = tpInput.value;
+            const origSl = slInput.value;
+
+            // 若輸入值 > 300 (明顯是目標價格而不是 %)，自動計算出百分比傳給後端
+            if (origTp && parseFloat(origTp) > 300) {
+              const tpPrice = parseFloat(origTp);
+              const tpPct = isLong 
+                ? ((tpPrice - currentPrice) / currentPrice * 100)
+                : ((currentPrice - tpPrice) / currentPrice * 100);
+              tpInput.value = Math.min(999, Math.max(0.01, tpPct)).toFixed(2);
+            }
+
+            if (origSl && parseFloat(origSl) > 300) {
+              const slPrice = parseFloat(origSl);
+              const slPct = isLong 
+                ? ((currentPrice - slPrice) / currentPrice * 100)
+                : ((slPrice - currentPrice) / currentPrice * 100);
+              slInput.value = Math.min(99, Math.max(0.01, slPct)).toFixed(2);
+            }
+
+            // 發送開倉請求後，將畫面框內的數值恢復成原本輸入的價格，維持直觀
+            setTimeout(() => {
+              tpInput.value = origTp;
+              slInput.value = origSl;
+            }, 300);
+          }
+        }, true); // 使用 Capture 捕獲階段，確保優先生效！
+      }
+
+      // 隨機日期按鈕邏輯
+      const btnRandom = document.getElementById('btn-random-date');
+      const inputStart = document.getElementById('f-start');
+      if (btnRandom && inputStart) {
+        btnRandom.addEventListener('click', () => {
+          const startTimestamp = new Date('2020-01-01').getTime();
+          const endTimestamp = new Date('2025-12-31').getTime();
+          const randomTimestamp = startTimestamp + Math.random() * (endTimestamp - startTimestamp);
+          const randomDate = new Date(randomTimestamp);
+          const yyyy = randomDate.getFullYear();
+          const mm = String(randomDate.getMonth() + 1).padStart(2, '0');
+          const dd = String(randomDate.getDate()).padStart(2, '0');
+          inputStart.value = `${yyyy}-${mm}-${dd}`;
+        });
+      }
+
+      // 新手說明按鈕彈出視窗互動邏輯
+      const btnBeginner = document.getElementById('btn-beginner');
+      const beginnerPopover = document.getElementById('beginner-popover');
+      const btnCloseBeginner = document.getElementById('btn-close-beginner');
+
+      if (btnBeginner && beginnerPopover) {
+        btnBeginner.addEventListener('click', () => {
+          beginnerPopover.classList.toggle('hidden');
+        });
+      }
+      if (btnCloseBeginner && beginnerPopover) {
+        btnCloseBeginner.addEventListener('click', () => {
+          beginnerPopover.classList.add('hidden');
+        });
+      }
+
+      // 多空切換按鈕互動邏輯
+      const btnLong = document.getElementById('btn-side-long');
+      const btnShort = document.getElementById('btn-side-short');
+      if (btnLong && btnShort) {
+        btnLong.addEventListener('click', () => {
+          btnLong.style.background = '#2e7d32';
+          btnLong.style.color = '#fff';
+          btnLong.setAttribute('aria-pressed', 'true');
+          btnShort.style.background = '#3a2325';
+          btnShort.style.color = '#ff5252';
+          btnShort.setAttribute('aria-pressed', 'false');
+        });
+        btnShort.addEventListener('click', () => {
+          btnShort.style.background = '#c62828';
+          btnShort.style.color = '#fff';
+          btnShort.setAttribute('aria-pressed', 'true');
+          btnLong.style.background = '#222';
+          btnLong.style.color = '#81c784';
+          btnLong.setAttribute('aria-pressed', 'false');
+        });
+      }
+    });
+  </script>
+</body>
+</html>
